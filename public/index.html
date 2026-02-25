@@ -23,29 +23,230 @@
       </p>
 
       <div class="row">
-        <button id="btnPrint">Imprimir (localhost bridge)</button>
+        <button id="btnTestConnection" style="display:none;">Test de conexión</button>
+        <button id="btnTestPrint" style="display:none;">Test de impresión</button>
+        <button id="btnPrintLogo1Preset" style="display:none;">Imprimir logo 1 (preset)</button>
+        <button id="btnPrintText1" style="display:none;">Imprimir texto 1</button>
         <button id="btnWake">Abrir app (deep link wake)</button>
+        <button id="btnCheckPrinterService">Checkear printer service en el dispositivo</button>
+        <button id="btnListPrinters">Leer impresoras</button>
       </div>
 
-      <h3>Config</h3>
+      <h3>Impresoras</h3>
       <div class="row">
         <label>
-          URL bridge:
-          <input id="bridgeUrl" value="http://127.0.0.1:9123/print" />
+          Seleccionar:
+          <select id="printersDropdown">
+            <option value="">(sin datos)</option>
+          </select>
         </label>
+
+        <label id="netPathLabel" style="display:none; margin-left: 12px;">
+          IP/Path:
+          <input id="netPathInput" placeholder="192.168.0.50" />
+        </label>
+      </div>
+
+      <h3>Impresión de texto</h3>
+      <div class="row">
+        <label>
+          Texto (máx 50):
+          <input id="customText" maxlength="50" placeholder="Hola, esto es una prueba" />
+        </label>
+        <button id="btnPrintText" style="display:none;">Imprimir texto</button>
+      </div>
+
+      <h3>Impresión de logo (test)</h3>
+      <div class="row">
+        <label style="width:100%;">
+          Base64:
+          <textarea id="logo1Base64" rows="3" style="width:100%;" placeholder="Pegá acá el base64 del logo"></textarea>
+        </label>
+      </div>
+      <div class="row">
+        <button id="btnPrintLogo1" style="display:none;">Imprimir logo 1 (test)</button>
       </div>
 
       <h3>Log</h3>
       <pre id="log"></pre>
     </div>
 
+    <script src="logo1PresetBase64.js"></script>
     <script>
       const logEl = document.getElementById("log");
-      const bridgeUrlEl = document.getElementById("bridgeUrl");
+      const printersDropdownEl = document.getElementById("printersDropdown");
+      const netPathLabelEl = document.getElementById("netPathLabel");
+      const netPathInputEl = document.getElementById("netPathInput");
+      const btnTestConnectionEl = document.getElementById("btnTestConnection");
+      const btnTestPrintEl = document.getElementById("btnTestPrint");
+      const btnWakeEl = document.getElementById("btnWake");
+      const btnCheckPrinterServiceEl = document.getElementById("btnCheckPrinterService");
+      const customTextEl = document.getElementById("customText");
+      const btnPrintTextEl = document.getElementById("btnPrintText");
+      const logo1Base64El = document.getElementById("logo1Base64");
+      const btnPrintLogo1El = document.getElementById("btnPrintLogo1");
+      const btnPrintLogo1PresetEl = document.getElementById("btnPrintLogo1Preset");
+      const btnPrintText1El = document.getElementById("btnPrintText1");
+      let lastPrinters = [];
 
       function log(msg) {
         const line = `[${new Date().toISOString()}] ${msg}`;
         logEl.textContent = `${line}\n${logEl.textContent}`;
+      }
+
+      async function checkPrinterServiceFlow() {
+        const url = "http://127.0.0.1:9123/check-printer-service";
+        log(`POST ${url}`);
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "X-Pos-Token": "dev-token"
+          }
+        });
+        const text = await res.text();
+        log(`Respuesta: ${res.status} ${res.statusText} | ${text}`);
+      }
+
+      function wakeFlow() {
+        const deepLink = "pocprintbridge://wake";
+        log(`Intentando abrir deep link: ${deepLink}`);
+        try {
+          window.location.href = deepLink;
+        } catch (e) {
+          log(`No se pudo abrir deep link: ${String(e)}`);
+        }
+      }
+
+      async function testPrintFlow() {
+        const selected = getSelectedPrinter();
+        if (!selected) {
+          log("No hay impresora seleccionada para Test de impresión");
+          updateTestButtons();
+          return;
+        }
+
+        const url = "http://127.0.0.1:9123/print";
+        const payload = { mode: "test", printer: selected };
+
+        log(`POST ${url}`);
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Pos-Token": "dev-token"
+          },
+          body: JSON.stringify(payload)
+        });
+
+        const raw = await res.text();
+        log(`Respuesta: ${res.status} ${res.statusText} | ${raw}`);
+        if (res.ok) {
+          tryAlertPrinterResponseMessage(raw);
+        }
+      }
+
+      async function printText1Flow() {
+        const selected = getSelectedPrinter();
+        if (!selected) {
+          log("No hay impresora seleccionada para Imprimir texto 1");
+          updateTestButtons();
+          return;
+        }
+
+        const presetText = "Lorem ipsum dolor sit amet consectetur adipiscing elit, phasellus ad pellentesque iaculis mus vitae, natoque himenaeos id cubilia feugiat porttitor. Scelerisque nunc gravida semper molestie erat eros facilisi accumsan, convallis tincidunt ligula odio vehicula dictumst habitasse, habitant praesent porta volutpat sociosqu curabitur neque. Taciti mattis malesuada dapibus nec molestie morbi sodales hendrerit, lectus ultrices vel fusce tellus cras imperdiet non pellentesque, nostra lacinia interdum conubia natoque inceptos egestas.";
+
+        const url = "http://127.0.0.1:9123/print-text";
+        const payload = { printer: selected, text: presetText };
+
+        log(`POST ${url}`);
+        log(`payload text len=${presetText.length}`);
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Pos-Token": "dev-token"
+          },
+          body: JSON.stringify(payload)
+        });
+
+        const raw = await res.text();
+        log(`Respuesta: ${res.status} ${res.statusText} | ${raw}`);
+        if (res.ok) {
+          tryAlertPrinterResponseMessage(raw);
+        }
+      }
+
+      async function printLogo1Flow() {
+        const selected = getSelectedPrinter();
+        if (!selected) {
+          log("No hay impresora seleccionada para Imprimir logo 1");
+          updateTestButtons();
+          return;
+        }
+
+        const base64 = (logo1Base64El.value ?? "").trim();
+        if (!base64) {
+          log("Base64 vacío para Imprimir logo 1");
+          updateTestButtons();
+          return;
+        }
+
+        const url = "http://127.0.0.1:9123/print-logo1";
+        const payload = { printer: selected, base64 };
+
+        log(`POST ${url}`);
+        log(`payload bytes aprox base64=${base64.length}`);
+
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Pos-Token": "dev-token"
+          },
+          body: JSON.stringify(payload)
+        });
+
+        const raw = await res.text();
+        log(`Respuesta: ${res.status} ${res.statusText} | ${raw}`);
+        if (res.ok) {
+          tryAlertPrinterResponseMessage(raw);
+        }
+      }
+
+      async function printCustomTextFlow() {
+        const selected = getSelectedPrinter();
+        if (!selected) {
+          log("No hay impresora seleccionada para Imprimir texto");
+          updateTestButtons();
+          return;
+        }
+
+        const text = String(customTextEl.value ?? "").trim();
+        if (!text) {
+          log("Texto vacío: no se envía a imprimir");
+          updateTestButtons();
+          return;
+        }
+
+        const safeText = text.slice(0, 50);
+        const url = "http://127.0.0.1:9123/print-text";
+        const payload = { printer: selected, text: safeText };
+
+        log(`POST ${url}`);
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Pos-Token": "dev-token"
+          },
+          body: JSON.stringify(payload)
+        });
+
+        const raw = await res.text();
+        log(`Respuesta: ${res.status} ${res.statusText} | ${raw}`);
+        if (res.ok) {
+          tryAlertPrinterResponseMessage(raw);
+        }
       }
 
       function buildSampleTicket() {
@@ -63,12 +264,32 @@
         };
       }
 
-      async function tryPrintOnce() {
-        const url = bridgeUrlEl.value.trim();
-        const payload = buildSampleTicket();
+      function tryAlertPrinterResponseMessage(rawText) {
+        let data;
+        try {
+          data = JSON.parse(rawText);
+        } catch (_e) {
+          return;
+        }
+
+        const msg = typeof data?.responseMessage === "string" ? data.responseMessage : "";
+        if (msg) {
+          alert(msg);
+        }
+      }
+
+      async function testConnectionFlow() {
+        const selected = getSelectedPrinter();
+        if (!selected) {
+          log("No hay impresora seleccionada para Test de conexión");
+          updateTestButtons();
+          return;
+        }
+
+        const url = "http://127.0.0.1:9123/test-connection";
+        const payload = { printer: selected };
 
         log(`POST ${url}`);
-
         const res = await fetch(url, {
           method: "POST",
           headers: {
@@ -80,26 +301,220 @@
 
         const text = await res.text();
         log(`Respuesta: ${res.status} ${res.statusText} | ${text}`);
-      }
-
-      function wakeApp() {
-        // La app ahora no expone deep link (para no abrir UI).
-        // Dejá este botón solo como recordatorio:
-        // la primera vez tenés que abrir la app manualmente para que arranque el servicio.
-        log("La app no se abre por deep link. Abrila manualmente 1 vez para iniciar el bridge.");
-      }
-
-      async function printFlow() {
-        try {
-          await tryPrintOnce();
-        } catch (e) {
-          log(`Fallo fetch (bridge no disponible): ${String(e)}`);
-          log("Abrí la app 1 vez (launcher) para iniciar el Foreground Service del bridge y reintentá.");
+        if (res.ok) {
+          tryAlertPrinterResponseMessage(text);
         }
       }
 
-      document.getElementById("btnWake").addEventListener("click", wakeApp);
-      document.getElementById("btnPrint").addEventListener("click", printFlow);
+      async function listPrinters() {
+        const url = "http://127.0.0.1:9123/list-printers";
+        log(`POST ${url}`);
+
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "X-Pos-Token": "dev-token"
+          }
+        });
+
+        const text = await res.text();
+        log(`Respuesta: ${res.status} ${res.statusText} | ${text}`);
+
+        if (!res.ok) return;
+
+        let data;
+        try {
+          data = JSON.parse(text);
+        } catch (_e) {
+          log("No se pudo parsear JSON de /list-printers");
+          return;
+        }
+
+        const printers = Array.isArray(data)
+          ? data
+          : Array.isArray(data?.printers)
+            ? data.printers
+            : Array.isArray(data?.data)
+              ? data.data
+              : [];
+
+        lastPrinters = printers;
+
+        printersDropdownEl.innerHTML = "";
+        if (!printers.length) {
+          const opt = document.createElement("option");
+          opt.value = "";
+          opt.textContent = "(sin impresoras)";
+          printersDropdownEl.appendChild(opt);
+          return;
+        }
+
+        for (let i = 0; i < printers.length; i++) {
+          const p = printers[i] ?? {};
+          const name = typeof p.name === "string" && p.name.trim() ? p.name.trim() : `Printer ${i + 1}`;
+          const opt = document.createElement("option");
+          opt.value = String(i);
+          opt.textContent = name;
+          printersDropdownEl.appendChild(opt);
+        }
+
+        updateNetEditor();
+        updateTestButtons();
+      }
+
+      function getSelectedPrinter() {
+        const idx = Number(printersDropdownEl.value);
+        if (!Number.isFinite(idx)) return null;
+        return lastPrinters[idx] ?? null;
+      }
+
+      function updateNetEditor() {
+        const p = getSelectedPrinter();
+        const name = typeof p?.name === "string" ? p.name : "";
+        const isNet = name.includes("(NET)");
+
+        netPathLabelEl.style.display = isNet ? "inline-block" : "none";
+        if (isNet) {
+          const path = typeof p?.path === "string" ? p.path : "";
+          netPathInputEl.value = path;
+        } else {
+          netPathInputEl.value = "";
+        }
+      }
+
+      function updateTestButtons() {
+        const selected = getSelectedPrinter();
+        const hasSelection = Boolean(selected);
+
+        btnTestConnectionEl.style.display = hasSelection ? "inline-block" : "none";
+        btnTestPrintEl.style.display = hasSelection ? "inline-block" : "none";
+
+        const text = (customTextEl.value ?? "").trim();
+        const hasText = text.length > 0;
+        btnPrintTextEl.style.display = hasSelection && hasText ? "inline-block" : "none";
+
+        const base64 = (logo1Base64El.value ?? "").trim();
+        const hasBase64 = base64.length > 0;
+        btnPrintLogo1El.style.display = hasSelection && hasBase64 ? "inline-block" : "none";
+
+        btnPrintLogo1PresetEl.style.display = hasSelection ? "inline-block" : "none";
+
+        btnPrintText1El.style.display = hasSelection ? "inline-block" : "none";
+      }
+
+      document.getElementById("btnListPrinters").addEventListener("click", async () => {
+        try {
+          await listPrinters();
+        } catch (e) {
+          log(`Fallo list printers: ${String(e)}`);
+          log("Abrí la app 1 vez (launcher) para iniciar el Foreground Service del bridge y reintentá.");
+        }
+      });
+
+      printersDropdownEl.addEventListener("change", () => {
+        const idx = Number(printersDropdownEl.value);
+        const p = Number.isFinite(idx) ? lastPrinters[idx] : null;
+        if (p) {
+          try {
+            log(`Impresora seleccionada: ${p.name ?? "(sin name)"} | ${JSON.stringify(p)}`);
+          } catch (_e) {
+            log(`Impresora seleccionada: ${p.name ?? "(sin name)"}`);
+          }
+        }
+
+        updateNetEditor();
+        updateTestButtons();
+      });
+
+      netPathInputEl.addEventListener("input", () => {
+        const idx = Number(printersDropdownEl.value);
+        if (!Number.isFinite(idx)) return;
+
+        const p = lastPrinters[idx];
+        if (!p || typeof p !== "object") return;
+
+        const name = typeof p.name === "string" ? p.name : "";
+        if (!name.includes("(NET)")) return;
+
+        p.path = netPathInputEl.value;
+        log(`NET path actualizado para '${p.name ?? "(sin name)"}': ${p.path}`);
+      });
+
+      customTextEl.addEventListener("input", () => {
+        if (customTextEl.value.length > 50) {
+          customTextEl.value = customTextEl.value.slice(0, 50);
+        }
+        updateTestButtons();
+      });
+
+      logo1Base64El.addEventListener("input", updateTestButtons);
+
+      btnPrintLogo1El.addEventListener("click", async () => {
+        try {
+          await printLogo1Flow();
+        } catch (e) {
+          log(`Fallo Imprimir logo 1: ${String(e)}`);
+        }
+      });
+
+      btnPrintLogo1PresetEl.addEventListener("click", async () => {
+        const prev = logo1Base64El.value;
+        try {
+          logo1Base64El.value = window.logo1PresetBase64 || logo1PresetBase64;
+          updateTestButtons();
+          await printLogo1Flow();
+        } catch (e) {
+          log(`Fallo Imprimir logo 1 preset: ${String(e)}`);
+        } finally {
+          logo1Base64El.value = prev;
+          updateTestButtons();
+        }
+      });
+
+      btnTestConnectionEl.addEventListener("click", async () => {
+        try {
+          await testConnectionFlow();
+        } catch (e) {
+          log(`Fallo Test de conexión: ${String(e)}`);
+        }
+      });
+
+      btnTestPrintEl.addEventListener("click", async () => {
+        try {
+          await testPrintFlow();
+        } catch (e) {
+          log(`Fallo Test de impresión: ${String(e)}`);
+        }
+      });
+
+      btnCheckPrinterServiceEl.addEventListener("click", async () => {
+        try {
+          await checkPrinterServiceFlow();
+        } catch (e) {
+          log(`Fallo check printer service: ${String(e)}`);
+          log("Abrí la app 1 vez (launcher) para iniciar el Foreground Service del bridge y reintentá.");
+        }
+      });
+
+      btnWakeEl.addEventListener("click", wakeFlow);
+
+      btnPrintTextEl.addEventListener("click", async () => {
+        try {
+          await printCustomTextFlow();
+        } catch (e) {
+          log(`Fallo Imprimir texto: ${String(e)}`);
+        }
+      });
+
+      btnPrintText1El.addEventListener("click", async () => {
+        try {
+          await printText1Flow();
+        } catch (e) {
+          log(`Fallo Imprimir texto 1: ${String(e)}`);
+        }
+      });
+
+      updateTestButtons();
 
       log("Listo. Tocá 'Imprimir' para probar el bridge local.");
     </script>
