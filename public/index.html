@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>POS Web Printer PoC</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
+      .card { max-width: 720px; padding: 16px; border: 1px solid #ddd; border-radius: 12px; }
+      button { padding: 12px 14px; border-radius: 10px; border: 1px solid #333; background: #111; color: #fff; font-size: 16px; }
+      pre { background: #0b1020; color: #e7e7e7; padding: 12px; border-radius: 10px; overflow: auto; }
+      .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+      input { padding: 10px; border-radius: 10px; border: 1px solid #ccc; min-width: 240px; }
+      .muted { color: #555; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>PoC impresión Android (web)</h1>
+      <p class="muted">
+        Esta página simula el POS web: intenta enviar un ticket a un <b>bridge local</b> en
+        <code>127.0.0.1:9123</code> (que después implementará la app Android).
+      </p>
+
+      <div class="row">
+        <button id="btnPrint">Imprimir (localhost bridge)</button>
+        <button id="btnWake">Abrir app (deep link wake)</button>
+      </div>
+
+      <h3>Config</h3>
+      <div class="row">
+        <label>
+          URL bridge:
+          <input id="bridgeUrl" value="http://127.0.0.1:9123/print" />
+        </label>
+      </div>
+
+      <h3>Log</h3>
+      <pre id="log"></pre>
+    </div>
+
+    <script>
+      const logEl = document.getElementById("log");
+      const bridgeUrlEl = document.getElementById("bridgeUrl");
+
+      function log(msg) {
+        const line = `[${new Date().toISOString()}] ${msg}`;
+        logEl.textContent = `${line}\n${logEl.textContent}`;
+      }
+
+      function buildSampleTicket() {
+        return {
+          source: "pos-web",
+          ts: Date.now(),
+          ticket: {
+            orderId: `TEST-${Math.floor(Math.random() * 100000)}`,
+            items: [
+              { name: "Café", qty: 1, price: 2500 },
+              { name: "Medialuna", qty: 2, price: 1200 }
+            ],
+            total: 4900
+          }
+        };
+      }
+
+      async function tryPrintOnce() {
+        const url = bridgeUrlEl.value.trim();
+        const payload = buildSampleTicket();
+
+        log(`POST ${url}`);
+
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Pos-Token": "dev-token"
+          },
+          body: JSON.stringify(payload)
+        });
+
+        const text = await res.text();
+        log(`Respuesta: ${res.status} ${res.statusText} | ${text}`);
+      }
+
+      function wakeApp() {
+        // La app ahora no expone deep link (para no abrir UI).
+        // Dejá este botón solo como recordatorio:
+        // la primera vez tenés que abrir la app manualmente para que arranque el servicio.
+        log("La app no se abre por deep link. Abrila manualmente 1 vez para iniciar el bridge.");
+      }
+
+      async function printFlow() {
+        try {
+          await tryPrintOnce();
+        } catch (e) {
+          log(`Fallo fetch (bridge no disponible): ${String(e)}`);
+          log("Abrí la app 1 vez (launcher) para iniciar el Foreground Service del bridge y reintentá.");
+        }
+      }
+
+      document.getElementById("btnWake").addEventListener("click", wakeApp);
+      document.getElementById("btnPrint").addEventListener("click", printFlow);
+
+      log("Listo. Tocá 'Imprimir' para probar el bridge local.");
+    </script>
+  </body>
+</html>
