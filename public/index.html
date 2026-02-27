@@ -47,6 +47,16 @@
         </label>
       </div>
 
+      <div class="row" id="btRow" style="display:none;">
+        <button id="btnLoadBtDevices">Cargar BT emparejados</button>
+        <label>
+          Dispositivo BT:
+          <select id="btDevicesDropdown">
+            <option value="">(sin datos)</option>
+          </select>
+        </label>
+      </div>
+
       <h3>Impresión de texto</h3>
       <div class="row">
         <label>
@@ -77,6 +87,9 @@
       const printersDropdownEl = document.getElementById("printersDropdown");
       const netPathLabelEl = document.getElementById("netPathLabel");
       const netPathInputEl = document.getElementById("netPathInput");
+      const btRowEl = document.getElementById("btRow");
+      const btnLoadBtDevicesEl = document.getElementById("btnLoadBtDevices");
+      const btDevicesDropdownEl = document.getElementById("btDevicesDropdown");
       const btnTestConnectionEl = document.getElementById("btnTestConnection");
       const btnTestPrintEl = document.getElementById("btnTestPrint");
       const btnWakeEl = document.getElementById("btnWake");
@@ -88,6 +101,7 @@
       const btnPrintLogo1PresetEl = document.getElementById("btnPrintLogo1Preset");
       const btnPrintText1El = document.getElementById("btnPrintText1");
       let lastPrinters = [];
+      let lastBtDevices = [];
 
       function log(msg) {
         const line = `[${new Date().toISOString()}] ${msg}`;
@@ -114,6 +128,25 @@
           window.location.href = deepLink;
         } catch (e) {
           log(`No se pudo abrir deep link: ${String(e)}`);
+        }
+      }
+
+      function updateBtEditor() {
+        const p = getSelectedPrinter();
+        const name = typeof p?.name === "string" ? p.name : "";
+        const isBt = name.includes("(BT)");
+
+        btRowEl.style.display = isBt ? "flex" : "none";
+        if (!isBt) return;
+
+        const saved = localStorage.getItem(`poc.bt.${name}`) || "";
+        if (saved && typeof p === "object") {
+          p.path = saved;
+        }
+
+        const current = typeof p?.path === "string" ? p.path : "";
+        if (current) {
+          btDevicesDropdownEl.value = current;
         }
       }
 
@@ -359,6 +392,65 @@
         }
 
         updateNetEditor();
+        updateBtEditor();
+        updateTestButtons();
+      }
+
+      async function listBtDevices() {
+        const url = "http://127.0.0.1:9123/list-bt-devices";
+        log(`POST ${url}`);
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "X-Pos-Token": "dev-token"
+          }
+        });
+
+        const text = await res.text();
+        log(`Respuesta: ${res.status} ${res.statusText} | ${text}`);
+        if (!res.ok) return;
+
+        let data;
+        try {
+          data = JSON.parse(text);
+        } catch (_e) {
+          log("No se pudo parsear JSON de /list-bt-devices");
+          return;
+        }
+
+        if (data && typeof data === "object" && typeof data.error === "string") {
+          log(`BT error: ${data.error}${data.permission ? ` | perm=${data.permission}` : ""}`);
+          return;
+        }
+
+        const devices = Array.isArray(data?.devices) ? data.devices : [];
+        lastBtDevices = devices;
+
+        btDevicesDropdownEl.innerHTML = "";
+        const opt0 = document.createElement("option");
+        opt0.value = "";
+        opt0.textContent = "(seleccionar)";
+        btDevicesDropdownEl.appendChild(opt0);
+
+        for (let i = 0; i < devices.length; i++) {
+          const d = devices[i] ?? {};
+          const name = typeof d.name === "string" ? d.name : "";
+          const address = typeof d.address === "string" ? d.address : "";
+          const opt = document.createElement("option");
+          opt.value = address;
+          opt.textContent = name && address ? `${name} (${address})` : address || name || `BT ${i + 1}`;
+          btDevicesDropdownEl.appendChild(opt);
+        }
+
+        const p = getSelectedPrinter();
+        if (p) {
+          const saved = localStorage.getItem(`poc.bt.${p.name ?? ""}`) || "";
+          if (saved) {
+            btDevicesDropdownEl.value = saved;
+          }
+        }
+
+        updateBtEditor();
         updateTestButtons();
       }
 
@@ -423,6 +515,7 @@
         }
 
         updateNetEditor();
+        updateBtEditor();
         updateTestButtons();
       });
 
@@ -438,6 +531,30 @@
 
         p.path = netPathInputEl.value;
         log(`NET path actualizado para '${p.name ?? "(sin name)"}': ${p.path}`);
+      });
+
+      btnLoadBtDevicesEl.addEventListener("click", async () => {
+        try {
+          await listBtDevices();
+        } catch (e) {
+          log(`Fallo list bt devices: ${String(e)}`);
+        }
+      });
+
+      btDevicesDropdownEl.addEventListener("change", () => {
+        const p = getSelectedPrinter();
+        if (!p || typeof p !== "object") return;
+
+        const name = typeof p.name === "string" ? p.name : "";
+        if (!name.includes("(BT)")) return;
+
+        const mac = String(btDevicesDropdownEl.value ?? "").trim();
+        if (!mac) return;
+
+        p.path = mac;
+        localStorage.setItem(`poc.bt.${name}`, mac);
+        log(`BT address actualizado para '${name}': ${mac}`);
+        updateTestButtons();
       });
 
       customTextEl.addEventListener("input", () => {
