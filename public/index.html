@@ -25,6 +25,7 @@
       <div class="row">
         <button id="btnTestConnection" style="display:none;">Test de conexión</button>
         <button id="btnTestPrint" style="display:none;">Test de impresión</button>
+        <button id="btnTestEscPos" style="display:none;">TEST PRINT ESC/POS CMD</button>
         <button id="btnPrintLogo1Preset" style="display:none;">Imprimir logo 1 (preset)</button>
         <button id="btnPrintText1" style="display:none;">Imprimir texto 1</button>
         <button id="btnWake">Abrir app (deep link wake)</button>
@@ -57,11 +58,36 @@
         </label>
       </div>
 
-      <h3>Impresión de texto</h3>
+      <h3>Texto libre</h3>
       <div class="row">
         <label>
-          Texto (máx 50):
-          <input id="customText" maxlength="50" placeholder="Hola, esto es una prueba" />
+          Texto:
+          <input id="customText" placeholder="Hola, esto es una prueba" />
+        </label>
+        <label>
+          Estilo:
+          <select id="customTextStyle">
+            <option value="normal">Normal</option>
+            <option value="bold">Negrita</option>
+            <option value="double_strike">Doble golpe</option>
+            <option value="bold_double_strike">Negrita + doble golpe</option>
+          </select>
+        </label>
+        <label>
+          Tamaño:
+          <select id="customTextSize">
+            <option value="normal">Normal</option>
+            <option value="double_height">Doble alto</option>
+            <option value="double_width">Doble ancho</option>
+            <option value="quad">Doble alto y ancho</option>
+          </select>
+        </label>
+        <label>
+          Alineación:
+          <select id="customTextAlign">
+            <option value="left">Izquierda</option>
+            <option value="center">Centrado</option>
+          </select>
         </label>
         <button id="btnPrintText" style="display:none;">Imprimir texto</button>
       </div>
@@ -92,9 +118,13 @@
       const btDevicesDropdownEl = document.getElementById("btDevicesDropdown");
       const btnTestConnectionEl = document.getElementById("btnTestConnection");
       const btnTestPrintEl = document.getElementById("btnTestPrint");
+      const btnTestEscPosEl = document.getElementById("btnTestEscPos");
       const btnWakeEl = document.getElementById("btnWake");
       const btnCheckPrinterServiceEl = document.getElementById("btnCheckPrinterService");
       const customTextEl = document.getElementById("customText");
+      const customTextStyleEl = document.getElementById("customTextStyle");
+      const customTextSizeEl = document.getElementById("customTextSize");
+      const customTextAlignEl = document.getElementById("customTextAlign");
       const btnPrintTextEl = document.getElementById("btnPrintText");
       const logo1Base64El = document.getElementById("logo1Base64");
       const btnPrintLogo1El = document.getElementById("btnPrintLogo1");
@@ -128,6 +158,267 @@
           window.location.href = deepLink;
         } catch (e) {
           log(`No se pudo abrir deep link: ${String(e)}`);
+        }
+      }
+
+      const printerCommands = {
+        ESC_INIT: "\x1B\x40",
+        ESC_ALIGN_CENTER: "\x1B\x61\x01",
+        ESC_ALIGN_LEFT: "\x1B\x61\x00",
+        ESC_BOLD_ON: "\x1B\x45\x01",
+        ESC_BOLD_OFF: "\x1B\x45\x00",
+        GS_DOUBLE_STRIKE_ON: "\x1B\x47\x01",
+        GS_DOUBLE_STRIKE_OFF: "\x1B\x47\x00",
+        GS_TEXT_SIZE: "\x1D\x21",
+        TEXT_NORMAL: "\x00",
+        TEXT_DOUBLE_HEIGHT: "\x01",
+        TEXT_DOUBLE_WIDTH: "\x10",
+        TEXT_QUAD_SIZE: "\x11"
+      };
+
+      function strToBytesLatin1(s) {
+        const out = new Uint8Array(s.length);
+        for (let i = 0; i < s.length; i++) {
+          out[i] = s.charCodeAt(i) & 0xff;
+        }
+        return out;
+      }
+
+      function concatBytes(...parts) {
+        const total = parts.reduce((acc, p) => acc + p.length, 0);
+        const out = new Uint8Array(total);
+        let offset = 0;
+        for (const p of parts) {
+          out.set(p, offset);
+          offset += p.length;
+        }
+        return out;
+      }
+
+      function bytesToBase64(bytes) {
+        const chunkSize = 0x8000;
+        let binary = "";
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+          const chunk = bytes.subarray(i, i + chunkSize);
+          binary += String.fromCharCode(...chunk);
+        }
+        return btoa(binary);
+      }
+
+      function bytesToHexPreview(bytes, maxPrefix = 96, maxSuffix = 48) {
+        if (!bytes || bytes.length === 0) return "<empty>";
+
+        const toHexSlice = (from, toExclusive) => {
+          const parts = [];
+          for (let i = from; i < toExclusive; i++) {
+            parts.push(bytes[i].toString(16).toUpperCase().padStart(2, "0"));
+          }
+          return parts.join(" ");
+        };
+
+        const prefixCount = Math.min(maxPrefix, bytes.length);
+        const suffixCount = bytes.length > prefixCount ? Math.min(maxSuffix, bytes.length - prefixCount) : 0;
+        const prefix = toHexSlice(0, prefixCount);
+        if (suffixCount <= 0) return prefix;
+        const suffixStart = bytes.length - suffixCount;
+        const suffix = toHexSlice(suffixStart, bytes.length);
+        return `${prefix} ... ${suffix}`;
+      }
+
+      function buildDataPrinterStringForRaw(selectedPrinter) {
+        const name = typeof selectedPrinter?.name === "string" ? selectedPrinter.name : "";
+        const path = typeof selectedPrinter?.path === "string" ? selectedPrinter.path : "";
+        const model = typeof selectedPrinter?.model === "string" ? selectedPrinter.model : "";
+
+        const looksLikeMac = /^[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}$/.test(path);
+        const looksLikeIpv4 = /^((25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(25[0-5]|2[0-4]\d|[01]?\d\d?)$/.test(path);
+
+        const printerType = name.includes("(NET)")
+          ? "NET"
+          : name.includes("(BT)")
+            ? "BT"
+            : looksLikeMac
+              ? "BT"
+              : looksLikeIpv4
+                ? "NET"
+                : "USB";
+
+        const printModel = model || name || "null";
+        const ethernet = printerType === "NET" || printerType === "BT" ? path : "";
+
+        const dataPrinter = {
+          opt: "sendToPrintProtocolComandera",
+          printModel,
+          ethernet,
+          printerType,
+          printerOut: "CUSTOM_WORKSTATION",
+          printerPackage: "null",
+          modo: "printRaw",
+          cashdrawer: "NINGUNO",
+          fontType: "FONT_B"
+        };
+
+        return JSON.stringify(dataPrinter);
+      }
+
+      function wrapTextFixedWidth(text, width = 48) {
+        const normalized = String(text ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+        const out = [];
+
+        for (const line of normalized.split("\n")) {
+          if (!line) {
+            out.push("");
+            continue;
+          }
+
+          for (let i = 0; i < line.length; i += width) {
+            out.push(line.slice(i, i + width));
+          }
+        }
+
+        return out;
+      }
+
+      function buildFreeTextEscPosBytes(text, style, size, align) {
+        const lines = wrapTextFixedWidth(text, 48);
+        const lf = "\n";
+        const cut = "\x1D\x56\x00";
+
+        const alignCmd = align === "center" ? printerCommands.ESC_ALIGN_CENTER : printerCommands.ESC_ALIGN_LEFT;
+
+        const sizeCmd = (() => {
+          switch (size) {
+            case "double_height":
+              return printerCommands.GS_TEXT_SIZE + printerCommands.TEXT_DOUBLE_HEIGHT;
+            case "double_width":
+              return printerCommands.GS_TEXT_SIZE + printerCommands.TEXT_DOUBLE_WIDTH;
+            case "quad":
+              return printerCommands.GS_TEXT_SIZE + printerCommands.TEXT_QUAD_SIZE;
+            default:
+              return printerCommands.GS_TEXT_SIZE + printerCommands.TEXT_NORMAL;
+          }
+        })();
+
+        const styleOnOff = (() => {
+          switch (style) {
+            case "bold":
+              return {
+                on: printerCommands.ESC_BOLD_ON,
+                off: printerCommands.ESC_BOLD_OFF
+              };
+            case "double_strike":
+              return {
+                on: printerCommands.GS_DOUBLE_STRIKE_ON,
+                off: printerCommands.GS_DOUBLE_STRIKE_OFF
+              };
+            case "bold_double_strike":
+              return {
+                on: printerCommands.ESC_BOLD_ON + printerCommands.GS_DOUBLE_STRIKE_ON,
+                off: printerCommands.ESC_BOLD_OFF + printerCommands.GS_DOUBLE_STRIKE_OFF
+              };
+            default:
+              return {
+                on: "",
+                off: ""
+              };
+          }
+        })();
+
+        let s = "";
+        s += printerCommands.ESC_INIT;
+        s += alignCmd;
+        s += sizeCmd;
+        s += styleOnOff.on;
+
+        for (const line of lines) {
+          s += line + lf;
+        }
+
+        s += styleOnOff.off;
+        s += printerCommands.GS_TEXT_SIZE + printerCommands.TEXT_NORMAL;
+        s += printerCommands.ESC_ALIGN_LEFT;
+        s += lf + lf + lf + lf + lf + lf + lf;
+        s += cut + lf;
+
+        return strToBytesLatin1(s);
+      }
+
+      function buildEscPosTestTicketBytes() {
+        const now = new Date();
+        const dd = String(now.getDate()).padStart(2, "0");
+        const mm = String(now.getMonth() + 1).padStart(2, "0");
+        const yyyy = String(now.getFullYear());
+        const hh = String(now.getHours()).padStart(2, "0");
+        const min = String(now.getMinutes()).padStart(2, "0");
+        const ss = String(now.getSeconds()).padStart(2, "0");
+        const dateStr = `${dd}-${mm}-${yyyy}`;
+        const timeStr = `${hh}:${min}:${ss}`;
+
+        const sep = "-".repeat(48);
+        const lf = "\n";
+
+        const s =
+          printerCommands.ESC_INIT +
+          printerCommands.ESC_ALIGN_CENTER +
+          printerCommands.ESC_BOLD_ON +
+          "IMPRESION DE TEST" + lf +
+          printerCommands.ESC_BOLD_OFF +
+          printerCommands.ESC_ALIGN_LEFT +
+          sep + lf +
+          dateStr + lf +
+          timeStr + lf +
+          sep + lf +
+          printerCommands.ESC_BOLD_ON + "TEXTO NEGRITA" + printerCommands.ESC_BOLD_OFF + lf +
+          printerCommands.GS_DOUBLE_STRIKE_ON + "TEXTO DOBLE NEGRITA" + printerCommands.GS_DOUBLE_STRIKE_OFF + lf +
+          printerCommands.ESC_INIT + printerCommands.ESC_ALIGN_CENTER + "TEXTO CENTRADO" + lf + printerCommands.ESC_ALIGN_LEFT +
+          printerCommands.GS_TEXT_SIZE + printerCommands.TEXT_DOUBLE_HEIGHT + "DOBLE ALTO" + lf +
+          printerCommands.GS_TEXT_SIZE + printerCommands.TEXT_QUAD_SIZE + "DOBLE ALTO Y ANCHO" + lf +
+          printerCommands.GS_TEXT_SIZE + printerCommands.TEXT_NORMAL +
+          sep + lf +
+          "Comandera Mostrador" + lf + lf + lf + lf + lf + lf + lf;
+
+        // Corte (GS V 0) + LF
+        const cut = "\x1D\x56\x00";
+        return concatBytes(strToBytesLatin1(s), strToBytesLatin1(cut + lf));
+      }
+
+      async function testEscPosFlow() {
+        const selected = getSelectedPrinter();
+        if (!selected) {
+          log("No hay impresora seleccionada para TEST PRINT ESC/POS CMD");
+          updateTestButtons();
+          return;
+        }
+
+        const url = "http://127.0.0.1:9123/print-raw";
+        const rawBytes = buildEscPosTestTicketBytes();
+        const rawCommandBase64 = bytesToBase64(rawBytes);
+        const stringDataPrinter = buildDataPrinterStringForRaw(selected);
+
+        const hexPreview = bytesToHexPreview(rawBytes);
+
+        const payload = {
+          stringDataPrinter,
+          rawCommandBase64
+        };
+
+        log(`POST ${url}`);
+        log(`Payload.stringDataPrinter=${stringDataPrinter}`);
+        log(`Payload.rawBytes=${rawBytes.length} rawHexPreview=[${hexPreview}]`);
+        log(`Payload.rawCommandBase64.length=${rawCommandBase64.length}`);
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Pos-Token": "dev-token"
+          },
+          body: JSON.stringify(payload)
+        });
+
+        const text = await res.text();
+        log(`Respuesta: ${res.status} ${res.statusText} | ${text}`);
+        if (res.ok) {
+          tryAlertPrinterResponseMessage(text);
         }
       }
 
@@ -261,11 +552,27 @@
           return;
         }
 
-        const safeText = text.slice(0, 50);
-        const url = "http://127.0.0.1:9123/print-text";
-        const payload = { printer: selected, text: safeText };
+        const style = String(customTextStyleEl?.value ?? "normal");
+        const size = String(customTextSizeEl?.value ?? "normal");
+        const align = String(customTextAlignEl?.value ?? "left");
+
+        const url = "http://127.0.0.1:9123/print-raw";
+        const rawBytes = buildFreeTextEscPosBytes(text, style, size, align);
+        const rawCommandBase64 = bytesToBase64(rawBytes);
+        const stringDataPrinter = buildDataPrinterStringForRaw(selected);
+        const hexPreview = bytesToHexPreview(rawBytes);
+
+        const payload = {
+          stringDataPrinter,
+          rawCommandBase64
+        };
 
         log(`POST ${url}`);
+
+        log(`Payload.stringDataPrinter=${stringDataPrinter}`);
+        log(`Payload.rawBytes=${rawBytes.length} rawHexPreview=[${hexPreview}]`);
+        log(`Payload.rawCommandBase64.length=${rawCommandBase64.length}`);
+
         const res = await fetch(url, {
           method: "POST",
           headers: {
@@ -480,6 +787,7 @@
 
         btnTestConnectionEl.style.display = hasSelection ? "inline-block" : "none";
         btnTestPrintEl.style.display = hasSelection ? "inline-block" : "none";
+        btnTestEscPosEl.style.display = hasSelection ? "inline-block" : "none";
 
         const text = (customTextEl.value ?? "").trim();
         const hasText = text.length > 0;
@@ -558,11 +866,12 @@
       });
 
       customTextEl.addEventListener("input", () => {
-        if (customTextEl.value.length > 50) {
-          customTextEl.value = customTextEl.value.slice(0, 50);
-        }
         updateTestButtons();
       });
+
+      customTextStyleEl.addEventListener("change", updateTestButtons);
+      customTextSizeEl.addEventListener("change", updateTestButtons);
+      customTextAlignEl.addEventListener("change", updateTestButtons);
 
       logo1Base64El.addEventListener("input", updateTestButtons);
 
@@ -601,6 +910,14 @@
           await testPrintFlow();
         } catch (e) {
           log(`Fallo Test de impresión: ${String(e)}`);
+        }
+      });
+
+      btnTestEscPosEl.addEventListener("click", async () => {
+        try {
+          await testEscPosFlow();
+        } catch (e) {
+          log(`Fallo TEST PRINT ESC/POS CMD: ${String(e)}`);
         }
       });
 
